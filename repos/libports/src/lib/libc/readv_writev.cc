@@ -20,6 +20,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 
 /* libc-internal includes */
@@ -30,6 +31,8 @@ using namespace Libc;
 
 struct Read
 {
+	inline static const short events = POLLIN | POLLRDNORM | POLLRDBAND;
+
 	ssize_t operator()(int fd, void *buf, size_t count)
 	{
 		return read(fd, buf, count);
@@ -39,6 +42,8 @@ struct Read
 
 struct Write
 {
+	inline static const short events = POLLOUT | POLLWRNORM | POLLWRBAND;
+
 	ssize_t operator()(int fd, const void *buf, size_t count)
 	{
 		return write(fd, buf, count);
@@ -58,6 +63,8 @@ static ssize_t readv_writev_impl(Rw_func rw_func, int fd, const struct iovec *io
 	ssize_t bytes_transfered_total = 0;
 	size_t v_len = 0;
 	int i;
+	struct pollfd poll_fd_struct = { fd, Rw_func::events, 0 };
+	bool blocked_once = false;
 
 	if (iovcnt < 1 || iovcnt > IOV_MAX) {
 		errno = EINVAL;
@@ -77,6 +84,19 @@ static ssize_t readv_writev_impl(Rw_func rw_func, int fd, const struct iovec *io
 		v_len = iov->iov_len;
 
 		while (v_len > 0) {
+			if (blocked_once) {
+				int poll_result = poll(&poll_fd_struct, 1, 0);
+
+				if (poll_result == -1)
+					return -1;
+
+				if (poll_result == 0)
+					return bytes_transfered_total;
+
+			} else {
+				blocked_once = true;
+			}
+
 			ssize_t bytes_transfered = rw_func(fd, v, v_len);
 
 			if (bytes_transfered == -1)
